@@ -14,9 +14,10 @@ mod switch;
 #[allow(clippy::module_inception)]
 mod task;
 
-use crate::config::MAX_APP_NUM;
+use crate::config::{MAX_APP_NUM, MAX_SYSCALL_NUM};
 use crate::loader::{get_num_app, init_app_cx};
 use crate::sync::UPSafeCell;
+use crate::timer::get_time_ms;
 use lazy_static::*;
 use switch::__switch;
 pub use task::{TaskControlBlock, TaskStatus};
@@ -54,6 +55,8 @@ lazy_static! {
         let mut tasks = [TaskControlBlock {
             task_cx: TaskContext::zero_init(),
             task_status: TaskStatus::UnInit,
+            syscall_times: [0; MAX_SYSCALL_NUM],
+            start_time: 0,
         }; MAX_APP_NUM];
         for (i, task) in tasks.iter_mut().enumerate() {
             task.task_cx = TaskContext::goto_restore(init_app_cx(i));
@@ -81,6 +84,7 @@ impl TaskManager {
         let task0 = &mut inner.tasks[0];
         task0.task_status = TaskStatus::Running;
         let next_task_cx_ptr = &task0.task_cx as *const TaskContext;
+        task0.start_time = get_time_ms();
         drop(inner);
         let mut _unused = TaskContext::zero_init();
         // before this, we should drop local variables that must be dropped manually
@@ -104,6 +108,19 @@ impl TaskManager {
         inner.tasks[current].task_status = TaskStatus::Exited;
     }
 
+    fn inc_syscall_times(&self, syscall_id: usize) {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].syscall_times[syscall_id] += 1;
+    }
+
+    fn get_tcb(&self) -> TaskControlBlock {
+        let inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        let current_tcb = inner.tasks[current];
+        current_tcb.clone()
+    }
+
     /// Find next task to run and return task id.
     ///
     /// In this case, we only return the first `Ready` task in task list.
@@ -123,6 +140,12 @@ impl TaskManager {
             let current = inner.current_task;
             inner.tasks[next].task_status = TaskStatus::Running;
             inner.current_task = next;
+            
+            let next_tcb = &mut inner.tasks[next];
+            if next_tcb.start_time == 0 {
+                next_tcb.start_time = get_time_ms()
+            }
+
             let current_task_cx_ptr = &mut inner.tasks[current].task_cx as *mut TaskContext;
             let next_task_cx_ptr = &inner.tasks[next].task_cx as *const TaskContext;
             drop(inner);
@@ -140,6 +163,16 @@ impl TaskManager {
 /// Run the first task in task list.
 pub fn run_first_task() {
     TASK_MANAGER.run_first_task();
+}
+
+/// Increase syscall times of a syscall_id
+pub fn inc_syscall_times(syscall_id:usize) {
+    TASK_MANAGER.inc_syscall_times(syscall_id)
+}
+
+/// Get current TCB
+pub fn get_current_tcb() -> TaskControlBlock {
+    TASK_MANAGER.get_tcb()
 }
 
 /// Switch current `Running` task to the task we have found,
