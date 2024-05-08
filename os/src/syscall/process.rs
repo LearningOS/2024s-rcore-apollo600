@@ -1,10 +1,14 @@
 //! Process management syscalls
 use crate::{
-    config::MAX_SYSCALL_NUM,
+    config::{MAX_SYSCALL_NUM, PAGE_SIZE_BITS, PAGE_SIZE}, 
+    mm::{PageTable, VirtPageNum}, 
     task::{
-        change_program_brk, exit_current_and_run_next, suspend_current_and_run_next, TaskStatus,
+        change_program_brk, current_user_token, exit_current_and_run_next, suspend_current_and_run_next, TaskStatus
     },
+    timer::get_time_us,
 };
+
+use core::mem::size_of;
 
 #[repr(C)]
 #[derive(Debug)]
@@ -43,7 +47,35 @@ pub fn sys_yield() -> isize {
 /// HINT: What if [`TimeVal`] is splitted by two pages ?
 pub fn sys_get_time(_ts: *mut TimeVal, _tz: usize) -> isize {
     trace!("kernel: sys_get_time");
-    -1
+    // _ts is in U-Page, kernel should use Task's memory set to access
+    // get token -> form page table -> map in kernel page -> access -> unmap
+
+    // 1. get task page table
+    let token = current_user_token();
+    let user_pg_table = PageTable::from_token(token);
+    // debug!("get user page table = {:?}", user_pg_table.root_ppn);
+    
+    // 2. get ptes
+    let start_addr = _ts as usize;
+    let end_addr = start_addr + size_of::<TimeVal>();
+    let page_offset = start_addr % PAGE_SIZE;
+    assert_eq!(start_addr >> PAGE_SIZE_BITS, end_addr >> PAGE_SIZE_BITS);
+    let vpn = VirtPageNum(start_addr >> PAGE_SIZE_BITS);
+    // debug!("try to map U {:?} => pte", vpn);
+    let ppn = user_pg_table.translate(vpn).unwrap().ppn();
+    // debug!("get ppn {:?}", ppn);
+
+    // 3. turn to buffer in va
+    let ts: *mut TimeVal = (ppn.get_mut() as *mut u8 as usize + page_offset) as *mut TimeVal;
+    
+    // 4. write to _ts
+    let usec = get_time_us();
+    unsafe {
+        (*ts).sec = usec / 1_000_000;
+        (*ts).usec = usec % 1_000_000;
+    }
+
+    0
 }
 
 /// YOUR JOB: Finish sys_task_info to pass testcases
