@@ -16,6 +16,7 @@ mod task;
 
 use crate::config::MAX_SYSCALL_NUM;
 use crate::loader::{get_app_data, get_num_app};
+use crate::mm::{MapPermission, VirtAddr};
 use crate::sync::UPSafeCell;
 use crate::trap::TrapContext;
 use crate::timer::get_time_ms;
@@ -186,6 +187,22 @@ impl TaskManager {
         let current = inner.current_task;
         inner.tasks[current].start_time
     }
+
+    fn mmap(&self, start_va: VirtAddr, end_va: VirtAddr, permission: MapPermission) {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        let memory_set = &mut inner.tasks[current].memory_set;
+        info!("mmap [{:?}, {:?})", start_va, end_va);
+        memory_set.insert_framed_area(start_va, end_va, permission);
+    }
+
+    fn munmap(&self, start_va: VirtAddr, end_va: VirtAddr) {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        let memory_set = &mut inner.tasks[current].memory_set;
+        info!("munmap [{:?}, {:?})", start_va, end_va);
+        memory_set.shrink_to(start_va, start_va);
+    }
 }
 
 /// Run the first task in task list.
@@ -247,4 +264,12 @@ pub fn current_task_info() -> (TaskStatus, [u32; MAX_SYSCALL_NUM], usize) {
 /// Increase syscall times of a syscall_id
 pub fn inc_syscall_times(syscall_id:usize) {
     TASK_MANAGER.inc_syscall_times(syscall_id)
+}
+
+pub fn mmap(start_va: VirtAddr, end_va: VirtAddr, permission: MapPermission) {
+    TASK_MANAGER.mmap(start_va, end_va, permission);
+}
+
+pub fn munmap(start_va: VirtAddr, end_va: VirtAddr) {
+    TASK_MANAGER.munmap(start_va, end_va);
 }
