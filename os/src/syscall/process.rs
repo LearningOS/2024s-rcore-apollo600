@@ -8,7 +8,7 @@ use crate::{
     task::{
         add_task, current_task, current_user_token, exit_current_and_run_next,
         suspend_current_and_run_next, TaskStatus,
-    }, timer::get_time_us,
+    }, timer::{get_time_ms, get_time_us},
 };
 
 #[repr(C)]
@@ -136,10 +136,23 @@ pub fn sys_get_time(_ts: *mut TimeVal, _tz: usize) -> isize {
 /// HINT: What if [`TaskInfo`] is splitted by two pages ?
 pub fn sys_task_info(_ti: *mut TaskInfo) -> isize {
     trace!(
-        "kernel:pid[{}] sys_task_info NOT IMPLEMENTED",
+        "kernel:pid[{}] sys_task_info",
         current_task().unwrap().pid.0
     );
-    -1
+
+    let ti = translated_refmut(current_user_token(), _ti);
+
+    // * access current TCB exclusively
+    let task = current_task().unwrap();
+    let current = task.inner_exclusive_access();
+    (*ti).status = current.task_status;
+    (*ti).syscall_times = current.syscall_times;
+    (*ti).time = get_time_ms() - current.start_time;
+    drop(current);
+    // * release current TCB manually
+    drop(task);
+
+    0
 }
 
 /// YOUR JOB: Implement mmap.
