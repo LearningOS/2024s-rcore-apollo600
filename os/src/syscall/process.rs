@@ -2,9 +2,9 @@
 use alloc::sync::Arc;
 
 use crate::{
-    config::MAX_SYSCALL_NUM,
+    config::{MAX_SYSCALL_NUM, PAGE_SIZE},
     loader::get_app_data_by_name,
-    mm::{translated_refmut, translated_str},
+    mm::{translated_refmut, translated_str, MapPermission, VirtPageNum, VirtAddr},
     task::{
         add_task, current_task, current_user_token, exit_current_and_run_next,
         suspend_current_and_run_next, TaskStatus,
@@ -158,10 +158,68 @@ pub fn sys_task_info(_ti: *mut TaskInfo) -> isize {
 /// YOUR JOB: Implement mmap.
 pub fn sys_mmap(_start: usize, _len: usize, _port: usize) -> isize {
     trace!(
-        "kernel:pid[{}] sys_mmap NOT IMPLEMENTED",
+        "kernel:pid[{}] sys_mmap",
         current_task().unwrap().pid.0
     );
-    -1
+
+    // check _start
+    if _start % PAGE_SIZE != 0 {
+        error!("_start is not aligned");
+        return -1;
+    }
+
+    // check _port
+    if (_port & !0x7) != 0 ||
+        (_port & 0x7) == 0 {
+        error!("_port is illegal");
+        return -1;
+    }
+
+    // form prot
+    let mut permission = MapPermission::U;
+    if _port & 0x1 != 0 {
+        permission |= MapPermission::R;
+    }
+    if _port & 0x2 != 0 {
+        permission |= MapPermission::W;
+    }
+    if _port & 0x4 != 0 {
+        permission |= MapPermission::X;
+    }
+
+    // * access task
+    let task = current_task().unwrap();
+    // * access TCB exclusively
+    let mut current = task.inner_exclusive_access();
+    let memory_set = &mut current.memory_set;
+
+    // traverse va
+    let mut start_addr = _start;
+    let end_addr = _start + _len;
+    while start_addr < end_addr {
+        let vpn = VirtPageNum::from(VirtAddr::from(start_addr));
+
+        // check remap
+        if let Some(pte) = memory_set.translate(vpn) {
+            if pte.is_valid() {
+                error!("remap happened");
+                return -1;
+            }
+        }
+
+        start_addr += PAGE_SIZE;
+    }
+
+    // map va
+    // mmap(_start.into(), end_addr.into(), permission);
+    memory_set.insert_framed_area(_start.into(), end_addr.into(), permission);
+
+    // * drop TCB manually
+    drop(current);
+    // * drop task manually
+    drop(task);
+    
+    0
 }
 
 /// YOUR JOB: Implement munmap.
