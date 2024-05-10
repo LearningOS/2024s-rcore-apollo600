@@ -225,10 +225,50 @@ pub fn sys_mmap(_start: usize, _len: usize, _port: usize) -> isize {
 /// YOUR JOB: Implement munmap.
 pub fn sys_munmap(_start: usize, _len: usize) -> isize {
     trace!(
-        "kernel:pid[{}] sys_munmap NOT IMPLEMENTED",
+        "kernel:pid[{}] sys_munmap",
         current_task().unwrap().pid.0
     );
-    -1
+
+    // check _start
+    if _start % PAGE_SIZE != 0 {
+        error!("_start is not aligned");
+        return -1;
+    }
+
+    // * access task
+    let task = current_task().unwrap();
+    // * access TCB exclusively
+    let mut current = task.inner_exclusive_access();
+    let memory_set = &mut current.memory_set;    
+
+    // traverse va
+    let mut start_addr = _start;
+    let end_addr = _start + _len;
+    while start_addr < end_addr {
+        let vpn = VirtPageNum::from(VirtAddr::from(start_addr));
+
+        // check remap
+        if let Some(pte) = memory_set.translate(vpn) {
+            if !pte.is_valid() {
+                error!("remap happened");
+                return -1;
+            }
+        } else {
+            return -1;
+        }
+
+        start_addr += PAGE_SIZE;
+    }
+
+    // unmap
+    memory_set.shrink_to(_start.into(), _start.into());
+
+    // * drop TCB manually
+    drop(current);
+    // * drop task manually
+    drop(task);
+
+    0
 }
 
 /// change data segment size
