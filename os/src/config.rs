@@ -23,3 +23,7 @@ pub const TRAP_CONTEXT_BASE: usize = TRAMPOLINE - PAGE_SIZE;
 pub const CLOCK_FREQ: usize = 12500000;
 /// the physical memory end
 pub const MEMORY_END: usize = 0x88000000;
+/// the Big Stride (magic number)
+/// set it as usize::MAX / process_count / cycles_process_used
+/// which equals 184467440 on 64-bit machine
+pub const BIG_STRIDE: usize = usize::MAX / 100_000 / 1_000_000;

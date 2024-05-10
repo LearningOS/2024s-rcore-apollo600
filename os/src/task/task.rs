@@ -77,6 +77,9 @@ pub struct TaskControlBlockInner {
 
     /// The priority of the Task
     pub prio: usize,
+
+    /// The used stride of the Task
+    pub stride: usize,
 }
 
 impl TaskControlBlockInner {
@@ -130,6 +133,7 @@ impl TaskControlBlock {
                     syscall_times: [0; MAX_SYSCALL_NUM],
                     start_time: 0,
                     prio: 16,
+                    stride: 0,
                 })
             },
         };
@@ -206,6 +210,7 @@ impl TaskControlBlock {
                     syscall_times: [0; MAX_SYSCALL_NUM],
                     start_time: 0,
                     prio: 16,
+                    stride: 0,
                 })
             },
         });
@@ -254,6 +259,7 @@ impl TaskControlBlock {
                     syscall_times: [0; MAX_SYSCALL_NUM],
                     start_time: 0,
                     prio: 16,
+                    stride: 0,
                 })
             },
         });
