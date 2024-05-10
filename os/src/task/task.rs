@@ -74,6 +74,9 @@ pub struct TaskControlBlockInner {
 
     /// The timestamp of the Task first switched to
     pub start_time: usize,
+
+    /// The priority of the Task
+    pub prio: usize,
 }
 
 impl TaskControlBlockInner {
@@ -126,6 +129,7 @@ impl TaskControlBlock {
                     program_brk: user_sp,
                     syscall_times: [0; MAX_SYSCALL_NUM],
                     start_time: 0,
+                    prio: 16,
                 })
             },
         };
@@ -201,6 +205,7 @@ impl TaskControlBlock {
                     program_brk: parent_inner.program_brk,
                     syscall_times: [0; MAX_SYSCALL_NUM],
                     start_time: 0,
+                    prio: 16,
                 })
             },
         });
@@ -248,6 +253,7 @@ impl TaskControlBlock {
                     program_brk: parent_inner.program_brk,
                     syscall_times: [0; MAX_SYSCALL_NUM],
                     start_time: 0,
+                    prio: 16,
                 })
             },
         });
