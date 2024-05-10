@@ -8,7 +8,7 @@ use crate::{
     task::{
         add_task, current_task, current_user_token, exit_current_and_run_next,
         suspend_current_and_run_next, TaskStatus,
-    },
+    }, timer::get_time_us,
 };
 
 #[repr(C)]
@@ -119,10 +119,16 @@ pub fn sys_waitpid(pid: isize, exit_code_ptr: *mut i32) -> isize {
 /// HINT: What if [`TimeVal`] is splitted by two pages ?
 pub fn sys_get_time(_ts: *mut TimeVal, _tz: usize) -> isize {
     trace!(
-        "kernel:pid[{}] sys_get_time NOT IMPLEMENTED",
+        "kernel:pid[{}] sys_get_time",
         current_task().unwrap().pid.0
     );
-    -1
+    
+    let ts = translated_refmut(current_user_token(), _ts);
+    let usec = get_time_us();
+    (*ts).sec = usec / 1_000_000;
+    (*ts).usec = usec % 1_000_000;
+
+    0
 }
 
 /// YOUR JOB: Finish sys_task_info to pass testcases
