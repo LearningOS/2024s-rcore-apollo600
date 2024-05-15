@@ -1,6 +1,8 @@
 //!Implementation of [`TaskManager`]
 use super::TaskControlBlock;
+use crate::config::BIG_STRIDE;
 use crate::sync::UPSafeCell;
+use crate::task::TaskStatus;
 use alloc::collections::VecDeque;
 use alloc::sync::Arc;
 use lazy_static::*;
@@ -23,7 +25,45 @@ impl TaskManager {
     }
     /// Take a process out of the ready queue
     pub fn fetch(&mut self) -> Option<Arc<TaskControlBlock>> {
-        self.ready_queue.pop_front()
+        // self.ready_queue.pop_front()
+        // self.ready_queue.pop_front()
+        let suitable_task: Arc<TaskControlBlock>;
+        let mut min_stride = usize::MAX;
+        let mut suitable_id = 0;
+
+        if self.ready_queue.is_empty() {
+            return None;
+        }
+
+        for (i, task) in self.ready_queue.iter().enumerate() {
+            let task_inner = task.inner_exclusive_access();
+            let status = task_inner.task_status;
+            let stride = task_inner.stride;
+            drop(task_inner);
+
+            if status != TaskStatus::Ready {
+                continue;
+            }
+
+            if stride < min_stride {
+                suitable_id = i;
+                min_stride = stride;
+            }
+        }
+
+        if let Some(task) = self.ready_queue.remove(suitable_id) {
+            suitable_task = task;
+        } else {
+            return None;
+        }
+        
+        let mut task_inner = suitable_task.inner_exclusive_access();
+        task_inner.stride += BIG_STRIDE / task_inner.prio;
+        drop(task_inner);
+
+        // info!("choose pid {}, stride = {}", suitable_task.pid.0, min_stride);
+        
+        Some(suitable_task)
     }
 }
 

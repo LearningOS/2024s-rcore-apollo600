@@ -3,13 +3,13 @@
 use alloc::sync::Arc;
 
 use crate::{
-    config::MAX_SYSCALL_NUM,
+    config::{MAX_SYSCALL_NUM, PAGE_SIZE},
     fs::{open_file, OpenFlags},
-    mm::{translated_refmut, translated_str},
+    mm::{translated_refmut, translated_str, MapPermission, VirtAddr, VirtPageNum},
     task::{
         add_task, current_task, current_user_token, exit_current_and_run_next,
         suspend_current_and_run_next, TaskStatus,
-    },
+    }, timer::{get_time_ms, get_time_us}
 };
 
 #[repr(C)]
@@ -30,6 +30,7 @@ pub struct TaskInfo {
     time: usize,
 }
 
+/// task exits and submit an exit code
 pub fn sys_exit(exit_code: i32) -> ! {
     trace!("kernel:pid[{}] sys_exit", current_task().unwrap().pid.0);
     exit_current_and_run_next(exit_code);
@@ -118,11 +119,12 @@ pub fn sys_waitpid(pid: isize, exit_code_ptr: *mut i32) -> isize {
 /// HINT: You might reimplement it with virtual memory management.
 /// HINT: What if [`TimeVal`] is splitted by two pages ?
 pub fn sys_get_time(_ts: *mut TimeVal, _tz: usize) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_get_time NOT IMPLEMENTED",
-        current_task().unwrap().pid.0
-    );
-    -1
+    let ts = translated_refmut(current_user_token(), _ts);
+    let usec = get_time_us();
+    ts.sec = usec / 1_000_000;
+    ts.usec = usec % 1_000_000;
+
+    0
 }
 
 /// YOUR JOB: Finish sys_task_info to pass testcases
@@ -130,28 +132,139 @@ pub fn sys_get_time(_ts: *mut TimeVal, _tz: usize) -> isize {
 /// HINT: What if [`TaskInfo`] is splitted by two pages ?
 pub fn sys_task_info(_ti: *mut TaskInfo) -> isize {
     trace!(
-        "kernel:pid[{}] sys_task_info NOT IMPLEMENTED",
+        "kernel:pid[{}] sys_task_info",
         current_task().unwrap().pid.0
     );
-    -1
+
+    let ti = translated_refmut(current_user_token(), _ti);
+
+    // * access current TCB exclusively
+    let task = current_task().unwrap();
+    let current = task.inner_exclusive_access();
+    (*ti).status = current.task_status;
+    (*ti).syscall_times = current.syscall_times;
+    (*ti).time = get_time_ms() - current.start_time;
+    drop(current);
+    // * release current TCB manually
+    drop(task);
+
+    0
 }
 
 /// YOUR JOB: Implement mmap.
 pub fn sys_mmap(_start: usize, _len: usize, _port: usize) -> isize {
     trace!(
-        "kernel:pid[{}] sys_mmap NOT IMPLEMENTED",
+        "kernel:pid[{}] sys_mmap",
         current_task().unwrap().pid.0
     );
-    -1
+
+    // check _start
+    if _start % PAGE_SIZE != 0 {
+        error!("_start is not aligned");
+        return -1;
+    }
+
+    // check _port
+    if (_port & !0x7) != 0 ||
+        (_port & 0x7) == 0 {
+        error!("_port is illegal");
+        return -1;
+    }
+
+    // form prot
+    let mut permission = MapPermission::U;
+    if _port & 0x1 != 0 {
+        permission |= MapPermission::R;
+    }
+    if _port & 0x2 != 0 {
+        permission |= MapPermission::W;
+    }
+    if _port & 0x4 != 0 {
+        permission |= MapPermission::X;
+    }
+
+    // * access task
+    let task = current_task().unwrap();
+    // * access TCB exclusively
+    let mut current = task.inner_exclusive_access();
+    let memory_set = &mut current.memory_set;
+
+    // traverse va
+    let mut start_addr = _start;
+    let end_addr = _start + _len;
+    while start_addr < end_addr {
+        let vpn = VirtPageNum::from(VirtAddr::from(start_addr));
+
+        // check remap
+        if let Some(pte) = memory_set.translate(vpn) {
+            if pte.is_valid() {
+                error!("remap happened");
+                return -1;
+            }
+        }
+
+        start_addr += PAGE_SIZE;
+    }
+
+    // map va
+    // mmap(_start.into(), end_addr.into(), permission);
+    memory_set.insert_framed_area(_start.into(), end_addr.into(), permission);
+
+    // * drop TCB manually
+    drop(current);
+    // * drop task manually
+    drop(task);
+    
+    0
 }
 
 /// YOUR JOB: Implement munmap.
 pub fn sys_munmap(_start: usize, _len: usize) -> isize {
     trace!(
-        "kernel:pid[{}] sys_munmap NOT IMPLEMENTED",
+        "kernel:pid[{}] sys_munmap",
         current_task().unwrap().pid.0
     );
-    -1
+
+    // check _start
+    if _start % PAGE_SIZE != 0 {
+        error!("_start is not aligned");
+        return -1;
+    }
+
+    // * access task
+    let task = current_task().unwrap();
+    // * access TCB exclusively
+    let mut current = task.inner_exclusive_access();
+    let memory_set = &mut current.memory_set;    
+
+    // traverse va
+    let mut start_addr = _start;
+    let end_addr = _start + _len;
+    while start_addr < end_addr {
+        let vpn = VirtPageNum::from(VirtAddr::from(start_addr));
+
+        // check remap
+        if let Some(pte) = memory_set.translate(vpn) {
+            if !pte.is_valid() {
+                error!("remap happened");
+                return -1;
+            }
+        } else {
+            return -1;
+        }
+
+        start_addr += PAGE_SIZE;
+    }
+
+    // unmap
+    memory_set.shrink_to(_start.into(), _start.into());
+
+    // * drop TCB manually
+    drop(current);
+    // * drop task manually
+    drop(task);
+
+    0
 }
 
 /// change data segment size
@@ -168,17 +281,48 @@ pub fn sys_sbrk(size: i32) -> isize {
 /// HINT: fork + exec =/= spawn
 pub fn sys_spawn(_path: *const u8) -> isize {
     trace!(
-        "kernel:pid[{}] sys_spawn NOT IMPLEMENTED",
+        "kernel:pid[{}] sys_spawn",
         current_task().unwrap().pid.0
     );
-    -1
+
+    let current_task = current_task().unwrap();
+
+    let token = current_user_token();
+    let path = translated_str(token, _path);
+    if let Some(app_inode) = open_file(path.as_str(), OpenFlags::RDONLY) {
+        let all_data = app_inode.read_all();
+        let new_task = current_task.spawn(all_data.as_slice());
+        let new_pid = new_task.pid.0;
+        // modify trap context of new_task, because it returns immediately after switching
+        let trap_cx = new_task.inner_exclusive_access().get_trap_cx();
+        // we do not have to move to next instruction since we have done it before
+        // for child process, fork returns 0
+        trap_cx.x[10] = 0;
+        // add new task to scheduler
+        add_task(new_task);
+        new_pid as isize
+    } else {
+        -1
+    }
 }
 
 // YOUR JOB: Set task priority.
 pub fn sys_set_priority(_prio: isize) -> isize {
     trace!(
-        "kernel:pid[{}] sys_set_priority NOT IMPLEMENTED",
+        "kernel:pid[{}] sys_set_priority",
         current_task().unwrap().pid.0
     );
-    -1
+    
+    if _prio <= 1 {
+        return -1;
+    }
+
+    let _prio = _prio as usize;
+
+    let task = current_task().unwrap();
+    let mut current = task.inner_exclusive_access();
+    current.prio = _prio;
+    let prio = current.prio;
+    drop(current);
+    prio as isize
 }

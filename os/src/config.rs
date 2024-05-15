@@ -25,3 +25,7 @@ pub const CLOCK_FREQ: usize = 12500000;
 pub const MEMORY_END: usize = 0x88000000;
 /// The base address of control registers in Virtio_Block device
 pub const MMIO: &[(usize, usize)] = &[(0x10001000, 0x1000)];
+/// the Big Stride (magic number)
+/// set it as usize::MAX / process_count / cycles_process_used
+/// which equals 184467440 on 64-bit machine
+pub const BIG_STRIDE: usize = usize::MAX / 100_000 / 1_000_000;
