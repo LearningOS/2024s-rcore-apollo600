@@ -94,6 +94,16 @@ impl TaskControlBlockInner {
             self.fd_table.len() - 1
         }
     }
+    pub fn get_fd(&self, path: &str) -> isize {
+        for i in 0..self.fd_table.len() {
+            if let Some(file) = &self.fd_table[i] {
+                if file.get_path() == path {
+                    return i as isize;
+                }
+            }
+        }
+        return -1;
+    }
 }
 
 impl TaskControlBlock {

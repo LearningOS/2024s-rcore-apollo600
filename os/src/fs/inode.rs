@@ -13,6 +13,7 @@ use alloc::vec::Vec;
 use bitflags::*;
 use easy_fs::{EasyFileSystem, Inode};
 use lazy_static::*;
+use alloc::string::String;
 
 /// inode in memory
 /// A wrapper around a filesystem inode
@@ -20,21 +21,24 @@ use lazy_static::*;
 pub struct OSInode {
     readable: bool,
     writable: bool,
+    path: String,
     inner: UPSafeCell<OSInodeInner>,
 }
 /// The OS inode inner in 'UPSafeCell'
 pub struct OSInodeInner {
     offset: usize,
     inode: Arc<Inode>,
+    nlink: usize,
 }
 
 impl OSInode {
     /// create a new inode in memory
-    pub fn new(readable: bool, writable: bool, inode: Arc<Inode>) -> Self {
+    pub fn new(readable: bool, writable: bool, path: &str, inode: Arc<Inode>) -> Self {
         Self {
             readable,
             writable,
-            inner: unsafe { UPSafeCell::new(OSInodeInner { offset: 0, inode }) },
+            path: path.into(),
+            inner: unsafe { UPSafeCell::new(OSInodeInner { offset: 0, inode, nlink: 1 }) },
         }
     }
     /// read all data from the inode
@@ -68,6 +72,27 @@ pub fn list_apps() {
         println!("{}", app);
     }
     println!("**************/");
+}
+
+/// create a link from link_name to file_name
+pub fn link(link_name: &str, file_name: &str) -> isize {
+    ROOT_INODE.map(link_name, file_name)
+}
+
+/// find inode_id by file name
+pub fn get_ino(file_name: &str) -> u32 {
+    ROOT_INODE.read_disk_inode(|disk_inode| {
+        ROOT_INODE.find_inode_id(file_name, disk_inode).unwrap()
+    })
+}
+
+/// check if a file exist
+pub fn check_file(file_name: &str) -> bool {
+    if let Some(_) = ROOT_INODE.find(file_name) {
+        return true;
+    } else {
+        return false;
+    }
 }
 
 bitflags! {
@@ -107,19 +132,19 @@ pub fn open_file(name: &str, flags: OpenFlags) -> Option<Arc<OSInode>> {
         if let Some(inode) = ROOT_INODE.find(name) {
             // clear size
             inode.clear();
-            Some(Arc::new(OSInode::new(readable, writable, inode)))
+            Some(Arc::new(OSInode::new(readable, writable, name, inode)))
         } else {
             // create file
             ROOT_INODE
                 .create(name)
-                .map(|inode| Arc::new(OSInode::new(readable, writable, inode)))
+                .map(|inode| Arc::new(OSInode::new(readable, writable, name, inode)))
         }
     } else {
         ROOT_INODE.find(name).map(|inode| {
             if flags.contains(OpenFlags::TRUNC) {
                 inode.clear();
             }
-            Arc::new(OSInode::new(readable, writable, inode))
+            Arc::new(OSInode::new(readable, writable, name, inode))
         })
     }
 }
@@ -154,5 +179,14 @@ impl File for OSInode {
             total_write_size += write_size;
         }
         total_write_size
+    }
+    fn get_path(&self) -> &str {
+        &self.path
+    }
+    fn get_nlink(&self) -> usize {
+        self.inner.exclusive_access().nlink
+    }
+    fn add_link(&self) {
+        self.inner.exclusive_access().nlink += 1;
     }
 }
