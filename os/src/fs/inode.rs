@@ -4,7 +4,7 @@
 //!
 //! `UPSafeCell<OSInodeInner>` -> `OSInode`: for static `ROOT_INODE`,we
 //! need to wrap `OSInodeInner` into `UPSafeCell`
-use super::File;
+use super::{File, StatMode};
 use crate::drivers::BLOCK_DEVICE;
 use crate::mm::UserBuffer;
 use crate::sync::UPSafeCell;
@@ -28,7 +28,6 @@ pub struct OSInode {
 pub struct OSInodeInner {
     offset: usize,
     inode: Arc<Inode>,
-    nlink: usize,
 }
 
 impl OSInode {
@@ -38,7 +37,7 @@ impl OSInode {
             readable,
             writable,
             path: path.into(),
-            inner: unsafe { UPSafeCell::new(OSInodeInner { offset: 0, inode, nlink: 1 }) },
+            inner: unsafe { UPSafeCell::new(OSInodeInner { offset: 0, inode }) },
         }
     }
     /// read all data from the inode
@@ -74,11 +73,6 @@ pub fn list_apps() {
     println!("**************/");
 }
 
-/// create a link from link_name to file_name
-pub fn link(link_name: &str, file_name: &str) -> isize {
-    ROOT_INODE.map(link_name, file_name)
-}
-
 /// find inode_id by file name
 pub fn get_ino(file_name: &str) -> u32 {
     ROOT_INODE.read_disk_inode(|disk_inode| {
@@ -86,13 +80,58 @@ pub fn get_ino(file_name: &str) -> u32 {
     })
 }
 
-/// check if a file exist
-pub fn check_file(file_name: &str) -> bool {
-    if let Some(_) = ROOT_INODE.find(file_name) {
-        return true;
-    } else {
-        return false;
+/// link a new path to a existed path
+pub fn link(link_name: &str, file_name: &str) {
+    let src_inode_id = ROOT_INODE.read_disk_inode(|disk_inode| {
+        ROOT_INODE.find_inode_id(file_name, disk_inode).unwrap()
+    });
+    ROOT_INODE.map(link_name, src_inode_id);
+
+    let src_inode = ROOT_INODE.find(link_name).unwrap();
+    src_inode.inc_link();
+}
+
+/// delete a link
+pub fn unlink(link_name: &str) -> isize {
+    let inode = ROOT_INODE.find(link_name).unwrap();
+    inode.dec_link();
+
+    if get_nlink(link_name) == 0 {
+        inode.clear();
     }
+
+    ROOT_INODE.unmap(link_name);
+    0
+}
+
+/// check if a file exist
+pub fn get_file_type(path: &str) -> StatMode {
+    let inode = ROOT_INODE.find(path);
+    if inode.is_none() {
+        return StatMode::NULL;
+    }
+    let inode = inode.unwrap();
+    inode.read_disk_inode(|disk_inode| {
+        if disk_inode.is_dir() {
+            StatMode::DIR
+        } else if disk_inode.is_file() {
+            StatMode::FILE
+        } else {
+            StatMode::NULL
+        }
+    })
+}
+
+/// get nlink by path
+pub fn get_nlink(path: &str) -> u32 {
+    let inode = ROOT_INODE.find(path);
+    if inode.is_none() {
+        return 0;
+    }
+    let inode = inode.unwrap();
+    inode.read_disk_inode(|disk_inode| {
+        disk_inode.nlink
+    })
 }
 
 bitflags! {
@@ -137,7 +176,10 @@ pub fn open_file(name: &str, flags: OpenFlags) -> Option<Arc<OSInode>> {
             // create file
             ROOT_INODE
                 .create(name)
-                .map(|inode| Arc::new(OSInode::new(readable, writable, name, inode)))
+                .map(|inode| {
+                    inode.inc_link();
+                    Arc::new(OSInode::new(readable, writable, name, inode))
+                })
         }
     } else {
         ROOT_INODE.find(name).map(|inode| {
@@ -182,11 +224,5 @@ impl File for OSInode {
     }
     fn get_path(&self) -> &str {
         &self.path
-    }
-    fn get_nlink(&self) -> usize {
-        self.inner.exclusive_access().nlink
-    }
-    fn add_link(&self) {
-        self.inner.exclusive_access().nlink += 1;
     }
 }

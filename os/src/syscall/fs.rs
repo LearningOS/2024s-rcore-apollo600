@@ -1,5 +1,5 @@
 //! File and filesystem-related syscalls
-use crate::fs::{check_file, get_ino, link, open_file, OpenFlags, Stat, StatMode};
+use crate::fs::{get_file_type, get_ino, get_nlink, link, open_file, unlink, OpenFlags, Stat, StatMode};
 use crate::mm::{translated_byte_buffer, translated_str, UserBuffer, translated_refmut};
 use crate::task::{current_task, current_user_token};
 
@@ -100,8 +100,8 @@ pub fn sys_fstat(_fd: usize, _st: *mut Stat) -> isize {
 
         st.dev = 0;
         st.ino = get_ino(file_name) as u64;
-        st.mode = if check_file(file_name) {StatMode::FILE} else {StatMode::NULL};
-        st.nlink = file.get_nlink() as u32;
+        st.mode = get_file_type(file_name);
+        st.nlink = get_nlink(file_name);
     } else {
         return -1;
     }
@@ -127,27 +127,26 @@ pub fn sys_linkat(_old_name: *const u8, _new_name: *const u8) -> isize {
     // ignore the return value of link
     link(new_name.as_str(), old_name.as_str());
 
-    // change the OSInode of _old_name
-    let current = current_task().unwrap();
-    let inner = current.inner_exclusive_access();
-    let src_fd = inner.get_fd(old_name.as_str());
-    if src_fd == -1 {
-        return -1;
-    }
-    let src_fd = src_fd as usize;
-
-    if let Some(src_file) = &inner.fd_table[src_fd] {
-        src_file.add_link()
-    }
-
     0
 }
 
 /// YOUR JOB: Implement unlinkat.
 pub fn sys_unlinkat(_name: *const u8) -> isize {
     trace!(
-        "kernel:pid[{}] sys_unlinkat NOT IMPLEMENTED",
+        "kernel:pid[{}] sys_unlinkat",
         current_task().unwrap().pid.0
     );
-    -1
+
+    let token = current_user_token();
+    let name = translated_str(token, _name);
+
+    // check file exists
+    if get_file_type(name.as_str()) == StatMode::NULL {
+        return -1;
+    }
+
+    // delete mapping from super block
+    unlink(name.as_str());
+
+    0
 }

@@ -42,12 +42,6 @@ impl File for Stdin {
     fn get_path(&self) -> &str {
         ""
     }
-    fn get_nlink(&self) -> usize {
-        0
-    }
-    fn add_link(&self) {
-        
-    }
 }
 
 impl File for Stdout {
@@ -68,11 +62,5 @@ impl File for Stdout {
     }
     fn get_path(&self) -> &str {
         ""
-    }
-    fn get_nlink(&self) -> usize {
-        0
-    }
-    fn add_link(&self) {
-        
     }
 }
